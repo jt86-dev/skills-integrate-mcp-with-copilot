@@ -16,12 +16,26 @@ body {
 }
 
 header {
+  position: relative;
   text-align: center;
-  padding: 20px 0;
+  padding: 64px 16px 20px;
   margin-bottom: 30px;
   background-color: #1a237e;
   color: white;
   border-radius: 5px;
+}
+
+#admin-mode-button {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 8px 12px;
+  background-color: white;
+  color: #1a237e;
+}
+
+#admin-mode-button:hover {
+  background-color: #e8eaf6;
 }
 
 header h1 {
@@ -164,6 +178,43 @@ button:hover {
   background-color: #3949ab;
 }
 
+#admin-dialog {
+  width: min(92vw, 420px);
+  margin: auto;
+  padding: 24px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  color: #333;
+}
+
+#admin-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+#admin-dialog h3 {
+  margin-bottom: 20px;
+  color: #1a237e;
+}
+
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.secondary-button {
+  background-color: #666;
+}
+
+#admin-message {
+  margin: 0 0 15px;
+  padding: 8px;
+}
+
+#signup-container[hidden] {
+  display: none;
+}
+
 .message {
   margin-top: 20px;
   padding: 10px;
@@ -197,4 +248,10 @@ footer {
   margin-top: 30px;
   padding: 20px;
   color: #666;
+}
+
+@media (min-width: 600px) {
+  header {
+    padding: 20px 170px;
+  }
 }
