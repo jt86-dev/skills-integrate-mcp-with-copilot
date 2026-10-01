@@ -3,6 +3,29 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const signupContainer = document.getElementById("signup-container");
+  const adminModeButton = document.getElementById("admin-mode-button");
+  const adminDialog = document.getElementById("admin-dialog");
+  const adminLoginForm = document.getElementById("admin-login-form");
+  const adminMessage = document.getElementById("admin-message");
+  let isAdmin = false;
+
+  function setAdminMode(authenticated) {
+    isAdmin = authenticated;
+    signupContainer.hidden = !authenticated;
+    adminModeButton.textContent = authenticated ? "Log out" : "Teacher login";
+  }
+
+  async function restoreAdminSession() {
+    try {
+      const response = await fetch("/auth/session");
+      const session = await response.json();
+      setAdminMode(response.ok && session.authenticated);
+    } catch (error) {
+      setAdminMode(false);
+      console.error("Error checking teacher session:", error);
+    }
+  }
 
   // Function to fetch activities from API
   async function fetchActivities() {
@@ -12,6 +35,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Clear loading message
       activitiesList.innerHTML = "";
+      activitySelect.innerHTML = '<option value="">-- Select an activity --</option>';
 
       // Populate activities list
       Object.entries(activities).forEach(([name, details]) => {
@@ -28,10 +52,12 @@ document.addEventListener("DOMContentLoaded", () => {
               <h5>Participants:</h5>
               <ul class="participants-list">
                 ${details.participants
-                  .map(
-                    (email) =>
-                      `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`
-                  )
+                  .map((email) => {
+                    const removeButton = isAdmin
+                      ? `<button class="delete-btn" data-activity="${name}" data-email="${email}" aria-label="Remove ${email} from ${name}">Remove</button>`
+                      : "";
+                    return `<li><span class="participant-email">${email}</span>${removeButton}</li>`;
+                  })
                   .join("")}
               </ul>
             </div>`
@@ -69,7 +95,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Handle unregister functionality
   async function handleUnregister(event) {
-    const button = event.target;
+    const button = event.currentTarget;
     const activity = button.getAttribute("data-activity");
     const email = button.getAttribute("data-email");
 
@@ -84,6 +110,10 @@ document.addEventListener("DOMContentLoaded", () => {
       );
 
       const result = await response.json();
+      if (response.status === 401) {
+        setAdminMode(false);
+        await fetchActivities();
+      }
 
       if (response.ok) {
         messageDiv.textContent = result.message;
@@ -128,6 +158,10 @@ document.addEventListener("DOMContentLoaded", () => {
       );
 
       const result = await response.json();
+      if (response.status === 401) {
+        setAdminMode(false);
+        await fetchActivities();
+      }
 
       if (response.ok) {
         messageDiv.textContent = result.message;
@@ -155,6 +189,59 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Initialize app
-  fetchActivities();
+  adminModeButton.addEventListener("click", async () => {
+    if (!isAdmin) {
+      adminMessage.textContent = "";
+      adminMessage.classList.add("hidden");
+      adminLoginForm.reset();
+      adminDialog.showModal();
+      return;
+    }
+
+    try {
+      const response = await fetch("/auth/logout", { method: "POST" });
+      if (!response.ok) {
+        throw new Error("Unable to log out. Please try again.");
+      }
+      setAdminMode(false);
+      await fetchActivities();
+    } catch (error) {
+      messageDiv.textContent = error.message;
+      messageDiv.className = "error";
+      messageDiv.classList.remove("hidden");
+    }
+  });
+
+  document.getElementById("cancel-admin-login").addEventListener("click", () => {
+    adminDialog.close();
+  });
+
+  adminLoginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    adminMessage.classList.add("hidden");
+
+    try {
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: document.getElementById("admin-username").value,
+          password: document.getElementById("admin-password").value,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || "Unable to log in");
+      }
+
+      setAdminMode(true);
+      adminDialog.close();
+      await fetchActivities();
+    } catch (error) {
+      adminMessage.textContent = error.message;
+      adminMessage.classList.remove("hidden");
+    }
+  });
+
+  restoreAdminSession().then(fetchActivities);
 });

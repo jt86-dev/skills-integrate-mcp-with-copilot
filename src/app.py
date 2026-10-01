@@ -5,14 +5,69 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+import base64
+import binascii
+import hashlib
+import hmac
+import json
 import os
 from pathlib import Path
+import time
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
+
+SESSION_COOKIE = "teacher_session"
+SESSION_DURATION_SECONDS = 8 * 60 * 60
+
+
+class AdminCredentials(BaseModel):
+    username: str
+    password: str
+
+
+def _constant_time_compare(first: str, second: str) -> bool:
+    return hmac.compare_digest(first.encode("utf-8"), second.encode("utf-8"))
+
+
+def _cookie_secure() -> bool:
+    return os.getenv("ADMIN_COOKIE_SECURE", "true").lower() != "false"
+
+
+def _is_admin_authenticated(request: Request) -> bool:
+    username = os.getenv("ADMIN_USERNAME")
+    secret = os.getenv("SESSION_SECRET")
+    token = request.cookies.get(SESSION_COOKIE)
+    if not username or not secret or not token:
+        return False
+
+    try:
+        encoded_payload, signature = token.rsplit(".", 1)
+        expected_signature = hmac.new(
+            secret.encode("utf-8"), encoded_payload.encode("ascii"), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected_signature):
+            return False
+
+        padding = "=" * (-len(encoded_payload) % 4)
+        payload = base64.urlsafe_b64decode(encoded_payload + padding)
+        session = json.loads(payload)
+        return (
+            _constant_time_compare(session["username"], username)
+            and session["expires_at"] > time.time()
+        )
+    except (binascii.Error, KeyError, TypeError, ValueError, UnicodeDecodeError):
+        return False
+
+
+def require_admin(request: Request) -> None:
+    if not _is_admin_authenticated(request):
+        raise HTTPException(status_code=401, detail="Teacher login required")
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
@@ -83,13 +138,73 @@ def root():
     return RedirectResponse(url="/static/index.html")
 
 
+@app.post("/auth/login")
+def login(credentials: AdminCredentials, response: Response):
+    username = os.getenv("ADMIN_USERNAME")
+    password = os.getenv("ADMIN_PASSWORD")
+    secret = os.getenv("SESSION_SECRET")
+    if not username or not password or not secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Teacher authentication is not configured",
+        )
+    if not (
+        _constant_time_compare(credentials.username, username)
+        and _constant_time_compare(credentials.password, password)
+    ):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    payload = json.dumps(
+        {
+            "username": username,
+            "expires_at": time.time() + SESSION_DURATION_SECONDS,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    encoded_payload = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        secret.encode("utf-8"), encoded_payload.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    response.set_cookie(
+        SESSION_COOKIE,
+        f"{encoded_payload}.{signature}",
+        max_age=SESSION_DURATION_SECONDS,
+        httponly=True,
+        secure=_cookie_secure(),
+        samesite="strict",
+        path="/",
+    )
+    return {"authenticated": True}
+
+
+@app.get("/auth/session")
+def get_admin_session(request: Request):
+    return {"authenticated": _is_admin_authenticated(request)}
+
+
+@app.post("/auth/logout")
+def logout(response: Response):
+    response.delete_cookie(
+        SESSION_COOKIE,
+        httponly=True,
+        secure=_cookie_secure(),
+        samesite="strict",
+        path="/",
+    )
+    return {"authenticated": False}
+
+
 @app.get("/activities")
 def get_activities():
     return activities
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(
+    activity_name: str,
+    email: str,
+    _admin: None = Depends(require_admin),
+):
     """Sign up a student for an activity"""
     # Validate activity exists
     if activity_name not in activities:
@@ -111,7 +226,11 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(
+    activity_name: str,
+    email: str,
+    _admin: None = Depends(require_admin),
+):
     """Unregister a student from an activity"""
     # Validate activity exists
     if activity_name not in activities:
